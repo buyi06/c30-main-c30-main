@@ -1,102 +1,118 @@
 <template>
-  <van-collapse-item :title="title" :name="activity.id">
-    <template #title>
-      <div class="activity-title">
-        <van-icon :name="iconName" class="activity-icon" />
-        <span>{{ typeLabel }}</span>
-        <span class="activity-name">{{ activity.title || '未命名' }}</span>
-        <van-tag :type="stateTagType" size="small">{{ stateLabel }}</van-tag>
+  <div class="activity-card">
+    <div class="activity-header" @click="expanded = !expanded">
+      <div class="activity-type-badge" :style="typeBadgeStyle">
+        {{ typeEmoji }}
       </div>
-    </template>
-
-    <!-- 签到详情 -->
-    <div v-if="activity.activityType === 1 || activity.activityType === 9" class="activity-detail">
-      <van-cell-group inset>
-        <van-cell title="签到模式" :value="activityPattern" />
-        <van-cell title="签到状态" :value="signStatusLabel" />
-      </van-cell-group>
-      <van-button
-        type="primary"
-        size="small"
-        block
-        @click="doSign"
-        :disabled="activity.state !== 2"
-      >
-        手动签到
-      </van-button>
+      <div class="activity-info">
+        <div class="activity-name">{{ activity.title || typeLabel }}</div>
+        <div class="activity-meta">
+          <span class="meta-type">{{ typeLabel }}</span>
+          <span class="meta-dot">·</span>
+          <van-tag :type="stateTagType" size="small" round>{{ stateLabel }}</van-tag>
+        </div>
+      </div>
+      <van-icon :name="expanded ? 'arrow-up' : 'arrow-down'" size="14" color="#94a3b8" />
     </div>
 
-    <!-- 讨论详情 -->
-    <div v-if="activity.activityType === 2" class="activity-detail">
-      <van-field
-        v-model="discussInput"
-        label="回复内容"
-        type="textarea"
-        rows="2"
-        autosize
-        placeholder="输入回复内容"
-      />
-      <van-button
-        type="primary"
-        size="small"
-        block
-        @click="doDiscuss"
-        :disabled="activity.state !== 2"
-      >
-        手动回复
-      </van-button>
-    </div>
+    <!-- 展开内容 -->
+    <div class="activity-body" v-if="expanded">
+      <!-- 签到 -->
+      <div v-if="activity.activityType === 1 || activity.activityType === 9" class="detail-content">
+        <div class="detail-row">
+          <span class="detail-label">签到模式</span>
+          <span class="detail-value">{{ activityPattern }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">签到状态</span>
+          <span class="detail-value" :class="signStatusLabel === '已签到' ? 'text-success' : 'text-warn'">
+            {{ signStatusLabel }}
+          </span>
+        </div>
+        <van-button
+          type="primary"
+          size="small"
+          round
+          block
+          @click="doSign"
+          :disabled="activity.state !== 2"
+          class="action-btn"
+        >
+          手动签到
+        </van-button>
+      </div>
 
-    <!-- 头脑风暴详情 -->
-    <div v-if="activity.activityType === 4" class="activity-detail">
-      <van-field
-        v-model="brainstormInput"
-        label="提交内容"
-        type="textarea"
-        rows="2"
-        autosize
-        placeholder="输入观点内容"
-      />
-      <van-button
-        type="primary"
-        size="small"
-        block
-        @click="doBrainstorm"
-        :disabled="activity.state !== 2"
-      >
-        手动提交
-      </van-button>
-    </div>
+      <!-- 讨论 -->
+      <div v-if="activity.activityType === 2" class="detail-content">
+        <van-field
+          v-model="discussInput"
+          type="textarea"
+          rows="2"
+          autosize
+          placeholder="输入回复内容..."
+          class="input-field"
+        />
+        <van-button
+          type="primary"
+          size="small"
+          round
+          block
+          @click="doDiscuss"
+          :disabled="activity.state !== 2"
+          class="action-btn"
+        >
+          手动回复
+        </van-button>
+      </div>
 
-    <!-- 投票详情 -->
-    <div v-if="activity.activityType === 3" class="activity-detail">
-      <van-checkbox-group v-model="voteSelected">
-        <van-cell-group inset>
-          <van-cell
-            v-for="opt in voteOptions"
-            :key="opt.sortOrder"
-            clickable
-            @click="toggleVote(opt.sortOrder)"
-          >
-            <template #title>
-              <van-checkbox :name="opt.sortOrder" ref="checkboxes">
-                {{ opt.optionContent || opt.content || '选项' + opt.sortOrder }}
-              </van-checkbox>
-            </template>
-          </van-cell>
-        </van-cell-group>
-      </van-checkbox-group>
-      <van-button
-        type="primary"
-        size="small"
-        block
-        @click="doVote"
-        :disabled="activity.state !== 2 || voteSelected.length === 0"
-      >
-        手动投票
-      </van-button>
+      <!-- 头脑风暴 -->
+      <div v-if="activity.activityType === 4" class="detail-content">
+        <van-field
+          v-model="brainstormInput"
+          type="textarea"
+          rows="2"
+          autosize
+          placeholder="输入观点内容..."
+          class="input-field"
+        />
+        <van-button
+          type="primary"
+          size="small"
+          round
+          block
+          @click="doBrainstorm"
+          :disabled="activity.state !== 2"
+          class="action-btn"
+        >
+          手动提交
+        </van-button>
+      </div>
+
+      <!-- 投票 -->
+      <div v-if="activity.activityType === 3" class="detail-content">
+        <div v-for="opt in voteOptions" :key="opt.sortOrder" class="vote-option"
+          :class="{ selected: voteSelected.includes(opt.sortOrder) }"
+          @click="toggleVote(opt.sortOrder)"
+        >
+          <span class="vote-check">
+            <van-icon v-if="voteSelected.includes(opt.sortOrder)" name="success" size="14" />
+          </span>
+          <span>{{ opt.optionContent || opt.content || '选项' + opt.sortOrder }}</span>
+        </div>
+        <van-button
+          type="primary"
+          size="small"
+          round
+          block
+          @click="doVote"
+          :disabled="activity.state !== 2 || voteSelected.length === 0"
+          class="action-btn"
+        >
+          手动投票
+        </van-button>
+      </div>
     </div>
-  </van-collapse-item>
+  </div>
 </template>
 
 <script setup>
@@ -104,37 +120,23 @@ import { ref, computed, onMounted } from 'vue'
 import { manualSign, manualDiscuss, manualBrainstorm, manualVote, getActivityDetail } from '../api/index.js'
 
 const props = defineProps({
-  activity: {
-    type: Object,
-    required: true,
-  },
-  faceTeachId: {
-    type: String,
-    default: '',
-  },
+  activity: { type: Object, required: true },
+  faceTeachId: { type: String, default: '' },
 })
 
 const emit = defineEmits(['refresh'])
 
+const expanded = ref(false)
 const discussInput = ref('')
 const brainstormInput = ref('')
 const voteSelected = ref([])
 const voteOptions = ref([])
 const signStatus = ref(-1)
-const signPatternData = ref('')
 const activityPattern = ref('普通')
 
-// 类型图标和标签
-const iconName = computed(() => {
-  const type = props.activity.activityType
-  switch (type) {
-    case 1: return 'success'
-    case 2: return 'chat-o'
-    case 3: return 'thumb-circle-o'
-    case 4: return 'bulb-o'
-    case 9: return 'cross'
-    default: return 'info-o'
-  }
+const typeEmoji = computed(() => {
+  const map = { 1: '✋', 2: '💬', 3: '🗳️', 4: '💡', 9: '👋' }
+  return map[props.activity.activityType] || '📋'
 })
 
 const typeLabel = computed(() => {
@@ -142,20 +144,28 @@ const typeLabel = computed(() => {
   return map[props.activity.activityType] || '其他'
 })
 
-const title = computed(() => props.activity.title || '活动')
+const typeBadgeStyle = computed(() => {
+  const map = {
+    1: 'background: rgba(16,185,129,0.12); color: #10b981;',
+    2: 'background: rgba(59,130,246,0.12); color: #3b82f6;',
+    3: 'background: rgba(245,158,11,0.12); color: #f59e0b;',
+    4: 'background: rgba(168,85,247,0.12); color: #a855f7;',
+    9: 'background: rgba(239,68,68,0.12); color: #ef4444;',
+  }
+  return map[props.activity.activityType] || 'background: #f1f5f9; color: #64748b;'
+})
 
-// 状态标签
 const stateLabel = computed(() => {
-  const state = props.activity.state || 0
-  if (state === 2) return '进行中'
-  if (state === 3) return '已结束'
+  const s = props.activity.state || 0
+  if (s === 2) return '进行中'
+  if (s === 3) return '已结束'
   return '未知'
 })
 
 const stateTagType = computed(() => {
-  const state = props.activity.state || 0
-  if (state === 2) return 'success'
-  if (state === 3) return 'default'
+  const s = props.activity.state || 0
+  if (s === 2) return 'success'
+  if (s === 3) return 'default'
   return 'primary'
 })
 
@@ -165,7 +175,6 @@ const signStatusLabel = computed(() => {
   return '未知'
 })
 
-// 加载详情
 onMounted(async () => {
   try {
     const res = await getActivityDetail(props.activity.id)
@@ -173,17 +182,12 @@ onMounted(async () => {
       const detail = res.data.result
       if (props.activity.activityType === 1 || props.activity.activityType === 9) {
         signStatus.value = detail.signStatus
-        signPatternData.value = detail.signDetail?.signPatternData || ''
         activityPattern.value = detail.pattern || '普通'
       }
       if (props.activity.activityType === 3) {
         const optData = detail.voteDetail?.optionData
         if (typeof optData === 'string') {
-          try {
-            voteOptions.value = JSON.parse(optData)
-          } catch (e) {
-            voteOptions.value = []
-          }
+          try { voteOptions.value = JSON.parse(optData) } catch (e) { voteOptions.value = [] }
         } else {
           voteOptions.value = optData || []
         }
@@ -201,88 +205,175 @@ const showToast = (msg) => {
 const doSign = async () => {
   try {
     const res = await manualSign(props.activity.id)
-    if (res.data.code === 200) {
-      showToast('签到成功')
-      emit('refresh')
-    } else {
-      showToast(res.data.message || '失败')
-    }
-  } catch (e) {
-    showToast('签到失败')
-  }
+    if (res.data.code === 200) { showToast('签到成功'); emit('refresh') }
+    else showToast(res.data.message || '失败')
+  } catch (e) { showToast('签到失败') }
 }
 
 const doDiscuss = async () => {
   try {
-    const content = discussInput.value || ''
-    const res = await manualDiscuss(props.activity.id, content)
-    if (res.data.code === 200) {
-      showToast('回复成功')
-      emit('refresh')
-    } else {
-      showToast(res.data.message || '失败')
-    }
-  } catch (e) {
-    showToast('回复失败')
-  }
+    const res = await manualDiscuss(props.activity.id, discussInput.value)
+    if (res.data.code === 200) { showToast('回复成功'); emit('refresh') }
+    else showToast(res.data.message || '失败')
+  } catch (e) { showToast('回复失败') }
 }
 
 const doBrainstorm = async () => {
   try {
-    const content = brainstormInput.value || ''
-    const res = await manualBrainstorm(props.activity.id, content)
-    if (res.data.code === 200) {
-      showToast('提交成功')
-      emit('refresh')
-    } else {
-      showToast(res.data.message || '失败')
-    }
-  } catch (e) {
-    showToast('提交失败')
-  }
+    const res = await manualBrainstorm(props.activity.id, brainstormInput.value)
+    if (res.data.code === 200) { showToast('提交成功'); emit('refresh') }
+    else showToast(res.data.message || '失败')
+  } catch (e) { showToast('提交失败') }
 }
 
 const toggleVote = (sortOrder) => {
   const idx = voteSelected.value.indexOf(sortOrder)
-  if (idx === -1) {
-    voteSelected.value.push(sortOrder)
-  } else {
-    voteSelected.value.splice(idx, 1)
-  }
+  if (idx === -1) voteSelected.value.push(sortOrder)
+  else voteSelected.value.splice(idx, 1)
 }
 
 const doVote = async () => {
   try {
-    const options = voteSelected.value.join(',')
-    const res = await manualVote(props.activity.id, options)
-    if (res.data.code === 200) {
-      showToast('投票成功')
-      emit('refresh')
-    } else {
-      showToast(res.data.message || '失败')
-    }
-  } catch (e) {
-    showToast('投票失败')
-  }
+    const res = await manualVote(props.activity.id, voteSelected.value.join(','))
+    if (res.data.code === 200) { showToast('投票成功'); emit('refresh') }
+    else showToast(res.data.message || '失败')
+  } catch (e) { showToast('投票失败') }
 }
 </script>
 
 <style scoped>
-.activity-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.activity-card {
+  margin: 0 16px 10px;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
-.activity-icon {
+.activity-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+}
+
+.activity-type-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 16px;
+  flex-shrink: 0;
+}
+
+.activity-info {
+  flex: 1;
+  min-width: 0;
 }
 
 .activity-name {
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.activity-detail {
-  padding: 8px 0;
+.activity-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.meta-type {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.meta-dot {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* 展开内容 */
+.activity-body {
+  border-top: 1px solid var(--border);
+  padding: 14px 16px;
+}
+
+.detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.detail-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.detail-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.text-success { color: var(--success) !important; }
+.text-warn { color: var(--warning) !important; }
+
+.input-field {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.action-btn {
+  margin-top: 4px;
+}
+
+/* 投票选项 */
+.vote-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.vote-option.selected {
+  background: var(--primary-bg);
+  color: var(--primary);
+}
+
+.vote-check {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.vote-option.selected .vote-check {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
 }
 </style>

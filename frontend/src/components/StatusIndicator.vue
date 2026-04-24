@@ -9,10 +9,7 @@
 import { computed } from 'vue'
 
 const props = defineProps({
-  status: {
-    type: String,
-    default: 'running',
-  },
+  status: { type: String, default: 'running' },
 })
 
 const statusClass = computed(() => {
@@ -38,29 +35,53 @@ const statusLabel = computed(() => {
 .status-indicator {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
+  position: relative;
 }
 
 .dot.green {
-  background: #07c160;
+  background: var(--success);
+  animation: dot-pulse 2s infinite;
+}
+
+.dot.green::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.25);
+  animation: ring-pulse 2s infinite;
 }
 
 .dot.yellow {
-  background: #ff976a;
+  background: var(--warning);
+  animation: dot-pulse 3s infinite;
 }
 
 .dot.red {
-  background: #ee0a24;
+  background: var(--danger);
+  animation: dot-pulse 1s infinite;
 }
 
 .label {
-  font-size: 14px;
-  color: #646566;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes ring-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.3; }
+  50% { transform: scale(1.5); opacity: 0; }
 }
 </style>
