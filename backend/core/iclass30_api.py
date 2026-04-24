@@ -1,7 +1,9 @@
 """C30平台API调用层 - 从iclass30_autosign.py抽取复用"""
 
+import os
 import requests
 import json
+import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -34,6 +36,30 @@ ACT_TYPE_MAP = {
 # 签到模式中文映射
 PATTERN_MAP = {1: "普通", 2: "扫码", 3: "手势"}
 
+# 课表缓存
+SCHEDULE_CACHE_HOURS = 6
+SCHEDULE_CACHE_FILE = os.environ.get(
+    "C30_SCHEDULE_CACHE",
+    os.path.join(os.path.dirname(__file__), "..", "..", "schedule_cache.json")
+)
+
+# API重试
+MAX_RETRIES = 3
+RETRY_DELAY = 2
+
+
+def _retry_request(fn, *args, **kwargs):
+    """带重试的请求执行，最多3次，间隔2秒"""
+    last_exc = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            return fn(*args, **kwargs)
+        except (requests.RequestException, requests.Timeout) as e:
+            last_exc = e
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+    raise last_exc
+
 
 class ScheduleManager:
     """课表管理 - 拉取/缓存课表，判断当前时段"""
@@ -51,7 +77,7 @@ class ScheduleManager:
         today = datetime.now()
         start = today.strftime("%Y-%m-%d")
         end = (today + timedelta(days=7)).strftime("%Y-%m-%d")
-        resp = session.get(f"{GATEWAY}/faceteach/stu/getListByAll", params={
+        resp = _retry_request(session.get, f"{GATEWAY}/faceteach/stu/getListByAll", params={
             "startDate": start, "endDate": end, "page": 1, "pageSize": 200,
         }, timeout=10)
         data = resp.json()
@@ -76,7 +102,37 @@ class ScheduleManager:
         today_str = today.strftime("%Y-%m-%d")
         self.today_classes = [c["faceTeachId"] for c in self.schedule.get(today_str, [])]
         self.loaded_date = today_str
+        self._save_cache()
         return True
+
+    def load_from_cache(self) -> bool:
+        """从本地缓存加载课表（6小时内有效）"""
+        if not os.path.exists(SCHEDULE_CACHE_FILE):
+            return False
+        try:
+            with open(SCHEDULE_CACHE_FILE, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+            cache_time = datetime.fromisoformat(cache.get("timestamp", "2000-01-01"))
+            if datetime.now() - cache_time > timedelta(hours=SCHEDULE_CACHE_HOURS):
+                return False
+            self.schedule = cache.get("schedule", {})
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            self.today_classes = [c["faceTeachId"] for c in self.schedule.get(today_str, [])]
+            self.loaded_date = today_str
+            return True
+        except Exception:
+            return False
+
+    def _save_cache(self):
+        """保存课表到本地缓存"""
+        try:
+            with open(SCHEDULE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump({
+                    "timestamp": datetime.now().isoformat(),
+                    "schedule": dict(self.schedule),
+                }, f, ensure_ascii=False)
+        except Exception:
+            pass
 
     def get_today_courses(self):
         return self.schedule.get(datetime.now().strftime("%Y-%m-%d"), [])
@@ -132,7 +188,7 @@ class C30AutoSign:
 
     def login(self) -> tuple[bool, str]:
         """登录获取token"""
-        resp = self.session.get(f"{GATEWAY}/user/portal/newLoginApp", params={
+        resp = _retry_request(self.session.get, f"{GATEWAY}/user/portal/newLoginApp", params={
             "userName": self.username, "password": self.password,
             "clientId": "4", "sourceType": "4", "terminalType": "h5", "userId": "",
         }, timeout=10)
@@ -144,12 +200,42 @@ class C30AutoSign:
             return True, "登录成功"
         return False, f"登录失败: {json.dumps(data, ensure_ascii=False)}"
 
+    def _is_token_expired(self, resp_data: dict) -> bool:
+        """检测C30 token是否过期（响应码特征）"""
+        code = resp_data.get("code")
+        msg = str(resp_data.get("msg", "")).lower()
+        if code == 401 or code == 403:
+            return True
+        if "token" in msg and ("过期" in msg or "失效" in msg or "expired" in msg or "invalid" in msg):
+            return True
+        return False
+
+    def _request_with_relogin(self, method: str, url: str, **kwargs) -> requests.Response:
+        """带自动重新登录的请求：若token过期则重新login后重试一次"""
+        timeout = kwargs.pop("timeout", 10)
+        if method == "get":
+            resp = _retry_request(self.session.get, url, timeout=timeout, **kwargs)
+        else:
+            resp = _retry_request(self.session.post, url, timeout=timeout, **kwargs)
+        try:
+            data = resp.json()
+            if self._is_token_expired(data):
+                ok, _ = self.login()
+                if ok:
+                    if method == "get":
+                        resp = _retry_request(self.session.get, url, timeout=timeout, **kwargs)
+                    else:
+                        resp = _retry_request(self.session.post, url, timeout=timeout, **kwargs)
+        except Exception:
+            pass
+        return resp
+
     def get_today_classes(self) -> list:
         """获取今日课堂列表"""
         today = datetime.now().strftime("%Y-%m-%d")
-        resp = self.session.get(f"{GATEWAY}/faceteach/stu/getListByAll", params={
+        resp = self._request_with_relogin("get", f"{GATEWAY}/faceteach/stu/getListByAll", params={
             "startDate": today, "endDate": today, "page": 1, "pageSize": 50,
-        }, timeout=10)
+        })
         data = resp.json()
         if data.get("code") == 200:
             classes = data.get("result", [])
@@ -160,9 +246,9 @@ class C30AutoSign:
 
     def get_activity_list(self, face_teach_id: str, class_state: int = STATE_ONGOING) -> list:
         """获取活动列表"""
-        resp = self.session.get(f"{GATEWAY}/faceteach/activity/stu/list", params={
+        resp = self._request_with_relogin("get", f"{GATEWAY}/faceteach/activity/stu/list", params={
             "classState": class_state, "faceTeachId": face_teach_id,
-        }, timeout=10)
+        })
         data = resp.json()
         if data.get("code") == 200:
             return data.get("result", [])
@@ -170,8 +256,8 @@ class C30AutoSign:
 
     def check_sign_status(self, sign_id: str) -> int:
         """查询签到状态: 1=已签, 0=未签, -1=查询失败"""
-        resp = self.session.get(f"{GATEWAY}/faceteach/sign/study/getStudyData",
-                                params={"signId": sign_id}, timeout=10)
+        resp = self._request_with_relogin("get", f"{GATEWAY}/faceteach/sign/study/getStudyData",
+                                          params={"signId": sign_id})
         data = resp.json()
         if data.get("code") == 200:
             return data.get("result", {}).get("studySignState", -1)
@@ -181,8 +267,8 @@ class C30AutoSign:
 
     def get_sign_detail(self, sign_id: str) -> dict | None:
         """获取签到详情（含签到答案）"""
-        resp = self.session.get(f"{GATEWAY}/faceteach/sign/get",
-                                params={"signId": sign_id}, timeout=10)
+        resp = self._request_with_relogin("get", f"{GATEWAY}/faceteach/sign/get",
+                                          params={"signId": sign_id})
         data = resp.json()
         if data.get("code") == 200:
             return data.get("result", {})
@@ -190,11 +276,11 @@ class C30AutoSign:
 
     def do_sign(self, sign_id: str, sign_pattern_data: str = "", center_point: str = "{}") -> tuple[bool, str]:
         """执行签到/签退 - 必须用form-urlencoded(data=)"""
-        resp = self.session.post(f"{GATEWAY}/faceteach/sign/study/participate", data={
+        resp = self._request_with_relogin("post", f"{GATEWAY}/faceteach/sign/study/participate", data={
             "signPatternData": sign_pattern_data,
             "signId": sign_id,
             "centerPoint": center_point,
-        }, timeout=10)
+        })
         data = resp.json()
         if data.get("code") == -200:
             return True, "已签到(重复)"
@@ -204,8 +290,8 @@ class C30AutoSign:
 
     # ===== 讨论 =====
     def get_discuss_detail(self, discuss_id: str) -> dict | None:
-        resp = self.session.get(f"{GATEWAY}/faceteach/discuss/view",
-                                params={"discussId": discuss_id}, timeout=10)
+        resp = self._request_with_relogin("get", f"{GATEWAY}/faceteach/discuss/view",
+                                          params={"discussId": discuss_id})
         data = resp.json()
         if data.get("code") == 200:
             return data.get("result", {})
@@ -213,14 +299,14 @@ class C30AutoSign:
 
     def do_discuss_reply(self, discuss_id: str, content: str, parent_id: str = "0") -> tuple[bool, str]:
         """讨论回复 - 用json="""
-        resp = self.session.post(f"{GATEWAY}/faceteach/discuss/reply/add", json={
+        resp = self._request_with_relogin("post", f"{GATEWAY}/faceteach/discuss/reply/add", json={
             "discussId": discuss_id,
             "parentId": parent_id,
             "sourceType": 1,
             "url": "",
             "content": content,
             "file": "[]",
-        }, timeout=10)
+        })
         data = resp.json()
         if data.get("code") == 200:
             return True, "讨论回复成功"
@@ -230,8 +316,8 @@ class C30AutoSign:
 
     # ===== 头脑风暴 =====
     def get_brainstorm_detail(self, brainstorm_id: str) -> dict | None:
-        resp = self.session.get(f"{GATEWAY}/faceteach/brainstorm/getBrainStorm",
-                                params={"brainstormId": brainstorm_id}, timeout=10)
+        resp = self._request_with_relogin("get", f"{GATEWAY}/faceteach/brainstorm/getBrainStorm",
+                                          params={"brainstormId": brainstorm_id})
         data = resp.json()
         if data.get("code") == 200:
             return data.get("result", {})
@@ -239,12 +325,12 @@ class C30AutoSign:
 
     def do_brainstorm_submit(self, brainstorm_id: str, face_teach_id: str, answer: str) -> tuple[bool, str]:
         """头脑风暴提交 - 用json="""
-        resp = self.session.post(f"{GATEWAY}/faceteach/brainstormstu/addBrainStormStu", json={
+        resp = self._request_with_relogin("post", f"{GATEWAY}/faceteach/brainstormstu/addBrainStormStu", json={
             "brainstormId": brainstorm_id,
             "answer": answer,
             "faceTeachId": face_teach_id,
             "file": "[]",
-        }, timeout=10)
+        })
         data = resp.json()
         if data.get("code") == 200:
             return True, "头脑风暴提交成功"
@@ -254,8 +340,8 @@ class C30AutoSign:
 
     # ===== 投票 =====
     def get_vote_detail(self, vote_id: str) -> dict | None:
-        resp = self.session.get(f"{GATEWAY}/faceteach/vote/get",
-                                params={"voteId": vote_id}, timeout=10)
+        resp = self._request_with_relogin("get", f"{GATEWAY}/faceteach/vote/get",
+                                          params={"voteId": vote_id})
         data = resp.json()
         if data.get("code") == 200:
             return data.get("result", {})
@@ -263,10 +349,10 @@ class C30AutoSign:
 
     def do_vote(self, vote_id: str, content: str) -> tuple[bool, str]:
         """投票 - 用data=(form-urlencoded)"""
-        resp = self.session.post(f"{GATEWAY}/faceteach/vote/study/participate", data={
+        resp = self._request_with_relogin("post", f"{GATEWAY}/faceteach/vote/study/participate", data={
             "voteId": vote_id,
             "content": content,
-        }, timeout=10)
+        })
         data = resp.json()
         if data.get("code") == 200:
             return True, "投票成功"

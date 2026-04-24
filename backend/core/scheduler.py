@@ -27,6 +27,8 @@ class SchedulerService:
         self._schedule_loaded_day = None
         self._job = None
         self._running = False
+        # 活动→faceTeachId 缓存（避免O(n²)遍历）
+        self._activity_course_map: dict[str, str] = {}
 
     def _create_api(self) -> C30AutoSign:
         """创建C30API实例"""
@@ -38,14 +40,19 @@ class SchedulerService:
     def start(self):
         """启动定时任务"""
         self.api = self._create_api()
+        # 尝试从缓存加载课表
+        if self.api.schedule_mgr.load_from_cache():
+            self.log.info("课表已从缓存加载", "system")
+            self._schedule_loaded_day = datetime.now().strftime("%Y-%m-%d")
         # 更新课表轮询间隔
         self.api.schedule_mgr.poll_intervals = self.config.get("poll_intervals", {
             "pre_class": 60, "in_class": 120, "between": 1800, "weekend": 7200
         })
         self._running = True
-        # 初始延迟5秒后首次执行
+        # 根据当前时段设置初始轮询间隔，避免启动时多余轮询
+        interval, _ = self.api.schedule_mgr.get_poll_interval()
         self._job = self.scheduler.add_job(
-            self._tick, "interval", seconds=60, id="c30_poll",
+            self._tick, "interval", seconds=interval, id="c30_poll",
             next_run_time=datetime.now()
         )
         self.scheduler.start()
@@ -89,6 +96,10 @@ class SchedulerService:
             })
         return jobs
 
+    def get_face_teach_id(self, activity_id: str) -> str | None:
+        """从缓存获取活动所属课程ID"""
+        return self._activity_course_map.get(activity_id)
+
     async def _tick(self):
         """定时轮询执行"""
         try:
@@ -108,6 +119,9 @@ class SchedulerService:
             self.log.info(msg, "system")
             if not ok:
                 self.state.update_login(False)
+                # 尝试从缓存恢复课表
+                if self.api.schedule_mgr.load_from_cache():
+                    self.log.info("API登录失败，使用缓存课表", "system")
                 return
             self.state.update_login(True, self.config.get("c30_username", ""))
             self.api.schedule_mgr.load_from_api(self.api.session)
@@ -161,6 +175,10 @@ class SchedulerService:
             for cs in [STATE_ONGOING, STATE_ENDED]:
                 activities = self.api.get_activity_list(face_teach_id, cs)
                 for act in activities:
+                    # 缓存活动→课程映射
+                    act_id = act.get("id", "")
+                    if act_id:
+                        self._activity_course_map[act_id] = face_teach_id
                     self._process_activity(act, face_teach_id, course_name)
 
     def _process_activity(self, act: dict, face_teach_id: str, course_name: str):
@@ -172,7 +190,7 @@ class SchedulerService:
         act_id = act.get("id", "")
 
         # 跳过已处理的
-        if act_id in self.state.done_ids:
+        if self.state.is_done(act_id):
             self.state.count_activity(act_type, "done")
             return
 
@@ -183,7 +201,7 @@ class SchedulerService:
             category = "sign"
             sign_status = self.api.check_sign_status(act_id)
             if sign_status == 1:
-                self.state.done_ids.add(act_id)
+                self.state.mark_done(act_id)
                 self.state.count_activity(act_type, "done")
                 self.log.success(f"[{type_str}] {act_title} - 已完成", category)
                 return
@@ -200,7 +218,7 @@ class SchedulerService:
                 self.log.info(f"[{type_str}] {act_title} - 普通签到...", category)
                 ok, resp = self.api.do_sign(act_id, "", cp)
                 if ok:
-                    self.state.done_ids.add(act_id)
+                    self.state.mark_done(act_id)
                     self.state.count_activity(act_type, "done")
                     self.log.success(f"[{type_str}] {act_title} - {resp}", category)
                 else:
@@ -216,7 +234,7 @@ class SchedulerService:
                 self.log.info(f"[{type_str}] {act_title} - {pattern_str}签到...", category)
                 ok, resp = self.api.do_sign(act_id, answer, cp)
                 if ok:
-                    self.state.done_ids.add(act_id)
+                    self.state.mark_done(act_id)
                     self.state.count_activity(act_type, "done")
                     self.log.success(f"[{type_str}] {act_title} - {resp}", category)
                 else:
@@ -231,7 +249,7 @@ class SchedulerService:
             self.log.info(f"[讨论] {act_title} - 自动回复...", category)
             ok, resp = self.api.do_discuss_reply(act_id, content)
             if ok:
-                self.state.done_ids.add(act_id)
+                self.state.mark_done(act_id)
                 self.state.count_activity(act_type, "done")
                 self.log.success(f"[讨论] {act_title} - {resp}", category)
             else:
@@ -246,7 +264,7 @@ class SchedulerService:
             self.log.info(f"[头脑风暴] {act_title} - 自动提交...", category)
             ok, resp = self.api.do_brainstorm_submit(act_id, face_teach_id, content)
             if ok:
-                self.state.done_ids.add(act_id)
+                self.state.mark_done(act_id)
                 self.state.count_activity(act_type, "done")
                 self.log.success(f"[头脑风暴] {act_title} - {resp}", category)
             else:
@@ -276,7 +294,7 @@ class SchedulerService:
             self.log.info(f"[投票] {act_title} - 投票(选项:{content})...", category)
             ok, resp = self.api.do_vote(act_id, content)
             if ok:
-                self.state.done_ids.add(act_id)
+                self.state.mark_done(act_id)
                 self.state.count_activity(act_type, "done")
                 self.log.success(f"[投票] {act_title} - {resp}", category)
             else:

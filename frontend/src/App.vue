@@ -46,6 +46,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { login } from './api/index.js'
+import { showToast } from './utils/toast.js'
 
 const showLogin = ref(false)
 const loginPassword = ref('')
@@ -81,12 +82,6 @@ const doLogin = async () => {
   } finally {
     loginLoading.value = false
   }
-}
-
-const showToast = (msg) => {
-  import('vant').then(({ showToast }) => {
-    showToast({ message: msg, duration: 2000 })
-  })
 }
 </script>
 

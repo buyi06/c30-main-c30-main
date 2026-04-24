@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from ..config import load_config, save_config, create_jwt, verify_jwt
+from ..config import load_config, save_config, create_jwt, verify_jwt, _hash_password, _verify_password
 from ..core.state import AppState
 from ..core.log_buffer import LogBuffer
 from ..core.scheduler import SchedulerService
@@ -90,7 +90,13 @@ async def get_course_activities(face_teach_id: str, request: Request, _=Depends(
     # 获取进行中和已结束的活动
     activities_ongoing = api.get_activity_list(face_teach_id, STATE_ONGOING)
     activities_ended = api.get_activity_list(face_teach_id, STATE_ENDED)
-    return {"code": 200, "result": activities_ongoing + activities_ended}
+    all_activities = activities_ongoing + activities_ended
+    # 缓存活动→课程映射
+    for act in all_activities:
+        act_id = act.get("id", "")
+        if act_id:
+            scheduler._activity_course_map[act_id] = face_teach_id
+    return {"code": 200, "result": all_activities}
 
 
 @router.get("/activities/{activity_id}/detail")
@@ -99,17 +105,32 @@ async def get_activity_detail(activity_id: str, request: Request, _=Depends(get_
     api = scheduler.api
     if not api:
         raise HTTPException(status_code=500, detail="API未初始化")
-    # 先获取活动列表来判断类型
-    # 需要知道活动类型才能调用对应详情API
-    # 从今日课程获取
-    for cls in api.get_today_classes():
-        fid = cls.get("id", cls.get("faceTeachId", ""))
+
+    # 优先从缓存找faceTeachId
+    face_teach_id = scheduler.get_face_teach_id(activity_id)
+
+    if face_teach_id:
+        # 直接从该课程获取活动列表找类型
         for cs in [STATE_ONGOING, STATE_ENDED]:
-            acts = api.get_activity_list(fid, cs)
+            acts = api.get_activity_list(face_teach_id, cs)
             for act in acts:
                 if act.get("id") == activity_id:
                     act_type = act.get("activityType", 0)
-                    return _get_detail_by_type(api, activity_id, act_type, fid)
+                    return _get_detail_by_type(api, activity_id, act_type, face_teach_id)
+    else:
+        # 缓存未命中，遍历课程（兼容性回退）
+        for cls in api.get_today_classes():
+            fid = cls.get("id", cls.get("faceTeachId", ""))
+            for cs in [STATE_ONGOING, STATE_ENDED]:
+                acts = api.get_activity_list(fid, cs)
+                for act in acts:
+                    aid = act.get("id", "")
+                    # 顺便缓存
+                    if aid:
+                        scheduler._activity_course_map[aid] = fid
+                    if aid == activity_id:
+                        act_type = act.get("activityType", 0)
+                        return _get_detail_by_type(api, activity_id, act_type, fid)
     raise HTTPException(status_code=404, detail="活动未找到")
 
 
@@ -183,6 +204,7 @@ async def manual_sign(activity_id: str, request: Request, _=Depends(get_current_
 
     ok, msg = api.do_sign(activity_id, sign_pattern_data, center_point)
     if ok:
+        scheduler.state.mark_done(activity_id)
         log.success(f"[手动签到] {msg}", "sign")
         return {"code": 200, "message": msg}
     else:
@@ -201,6 +223,7 @@ async def manual_discuss(activity_id: str, req: DiscussAction, request: Request,
     content = req.content or request.app.state.config.get("auto_discuss_content", "老师讲得很好，受益匪浅")
     ok, msg = api.do_discuss_reply(activity_id, content)
     if ok:
+        scheduler.state.mark_done(activity_id)
         log.success(f"[手动讨论] {msg}", "discuss")
         return {"code": 200, "message": msg}
     else:
@@ -216,24 +239,33 @@ async def manual_brainstorm(activity_id: str, req: BrainstormAction, request: Re
     if not api:
         raise HTTPException(status_code=500, detail="API未初始化")
 
-    # 需要知道faceTeachId
     content = req.content or request.app.state.config.get("auto_brainstorm_content", "我认为应该从多个角度思考这个问题")
-    # 从课程列表获取faceTeachId
-    face_teach_id = ""
-    for cls in api.get_today_classes():
-        fid = cls.get("id", cls.get("faceTeachId", ""))
-        for cs in [STATE_ONGOING, STATE_ENDED]:
-            acts = api.get_activity_list(fid, cs)
-            for act in acts:
-                if act.get("id") == activity_id:
-                    face_teach_id = fid
+    # 优先从缓存获取faceTeachId
+    face_teach_id = scheduler.get_face_teach_id(activity_id)
+    if not face_teach_id:
+        # 回退：遍历课程
+        for cls in api.get_today_classes():
+            fid = cls.get("id", cls.get("faceTeachId", ""))
+            for cs in [STATE_ONGOING, STATE_ENDED]:
+                acts = api.get_activity_list(fid, cs)
+                for act in acts:
+                    aid = act.get("id", "")
+                    if aid:
+                        scheduler._activity_course_map[aid] = fid
+                    if aid == activity_id:
+                        face_teach_id = fid
+                        break
+                if face_teach_id:
                     break
+            if face_teach_id:
+                break
 
     if not face_teach_id:
         raise HTTPException(status_code=404, detail="无法确定课程ID")
 
     ok, msg = api.do_brainstorm_submit(activity_id, face_teach_id, content)
     if ok:
+        scheduler.state.mark_done(activity_id)
         log.success(f"[手动头脑风暴] {msg}", "brainstorm")
         return {"code": 200, "message": msg}
     else:
@@ -269,6 +301,7 @@ async def manual_vote(activity_id: str, req: VoteAction, request: Request, _=Dep
 
     ok, msg = api.do_vote(activity_id, content)
     if ok:
+        scheduler.state.mark_done(activity_id)
         log.success(f"[手动投票] {msg}", "vote")
         return {"code": 200, "message": msg}
     else:
@@ -321,15 +354,16 @@ async def update_credentials(req: CredentialsUpdate, request: Request, _=Depends
     scheduler: SchedulerService = request.app.state.scheduler_service
     scheduler.api = scheduler._create_api()
     scheduler._schedule_loaded_day = None  # 强制重新加载课表
+    scheduler._activity_course_map.clear()  # 清除活动映射缓存
     return {"code": 200, "message": "账号已更新"}
 
 
 @router.put("/config/password")
 async def update_password(req: PasswordUpdate, request: Request, _=Depends(get_current_user)):
     config = request.app.state.config
-    if req.old_password != config.get("admin_password", "admin123"):
+    if not _verify_password(req.old_password, config.get("admin_password", "")):
         raise HTTPException(status_code=401, detail="旧密码错误")
-    config["admin_password"] = req.new_password
+    config["admin_password"] = _hash_password(req.new_password)
     save_config(config)
     return {"code": 200, "message": "密码已更新"}
 
@@ -353,3 +387,6 @@ async def scheduler_resume(request: Request, _=Depends(get_current_user)):
 async def scheduler_jobs(request: Request, _=Depends(get_current_user)):
     scheduler: SchedulerService = request.app.state.scheduler_service
     return {"code": 200, "result": scheduler.get_jobs_info()}
+
+
+# ===== 密码哈希（从config模块导入） =====

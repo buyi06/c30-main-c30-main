@@ -22,9 +22,6 @@ COPY backend/ ./
 # 复制前端构建产物
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
-# 复制配置文件（容器内用，实际由volume挂载）
-COPY config.json /app/config.json
+EXPOSE 8080
 
-EXPOSE 8000
-
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080"]

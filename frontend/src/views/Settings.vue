@@ -114,6 +114,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getConfig, updateConfig, updateCredentials, updatePassword } from '../api/index.js'
+import { showToast } from '../utils/toast.js'
 
 const oldPassword = ref('')
 const newPassword = ref('')
@@ -141,12 +142,6 @@ onMounted(async () => {
     }
   } catch (e) { /* ignore */ }
 })
-
-const showToast = (msg) => {
-  import('vant').then(({ showToast }) => {
-    showToast({ message: msg, duration: 2000 })
-  })
-}
 
 const changePassword = async () => {
   if (!oldPassword.value || !newPassword.value) return showToast('请填写完整')

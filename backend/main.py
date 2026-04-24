@@ -25,6 +25,11 @@ FRONTEND_DIST = os.environ.get(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    # 检查config.json是否为目录（Docker volume挂载陷阱）
+    from .config import CONFIG_PATH
+    if os.path.isdir(CONFIG_PATH):
+        # Docker将不存在的文件挂载为目录，删除后创建文件
+        os.rmdir(CONFIG_PATH)
     # 加载配置
     config = load_config()
     app.state.config = config

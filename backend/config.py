@@ -1,5 +1,6 @@
 """配置管理 - config.json读写 + JWT"""
 
+import hashlib
 import json
 import os
 import secrets
@@ -13,8 +14,8 @@ CONFIG_PATH = os.environ.get("C30_CONFIG_PATH", str(Path(__file__).parent.parent
 
 DEFAULT_CONFIG = {
     "admin_password": "admin123",
-    "c30_username": "2504140523",
-    "c30_password": "114114Aa@",
+    "c30_username": "",
+    "c30_password": "",
     "auto_discuss_content": "老师讲得很好，受益匪浅",
     "auto_brainstorm_content": "我认为应该从多个角度思考这个问题，结合实践进行深入分析",
     "poll_intervals": {
@@ -51,9 +52,22 @@ def save_config(config: dict):
         json.dump(config, f, ensure_ascii=False, indent=2)
 
 
+def _hash_password(password: str) -> str:
+    """SHA256哈希密码"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    """验证密码（兼容明文和哈希）"""
+    if len(stored) < 64:
+        return password == stored
+    return _hash_password(password) == stored
+
+
 def create_jwt(config: dict, password: str) -> str | None:
     """验证管理密码并生成JWT，失败返回None"""
-    if password != config.get("admin_password", "admin123"):
+    stored = config.get("admin_password", "admin123")
+    if not _verify_password(password, stored):
         return None
     payload = {
         "sub": "admin",

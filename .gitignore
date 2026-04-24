@@ -21,6 +21,9 @@ Thumbs.db
 # Config with secrets
 config.json
 
+# Schedule cache
+schedule_cache.json
+
 # Logs
 *.log
 

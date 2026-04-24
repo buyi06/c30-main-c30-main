@@ -118,6 +118,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { manualSign, manualDiscuss, manualBrainstorm, manualVote, getActivityDetail } from '../api/index.js'
+import { showToast } from '../utils/toast.js'
 
 const props = defineProps({
   activity: { type: Object, required: true },
@@ -195,12 +196,6 @@ onMounted(async () => {
     }
   } catch (e) { /* ignore */ }
 })
-
-const showToast = (msg) => {
-  import('vant').then(({ showToast }) => {
-    showToast({ message: msg, duration: 2000 })
-  })
-}
 
 const doSign = async () => {
   try {

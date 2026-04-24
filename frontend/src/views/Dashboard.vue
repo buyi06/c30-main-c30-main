@@ -96,6 +96,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getStatus, getCoursesToday, manualRefresh, schedulerPause, schedulerResume } from '../api/index.js'
+import { showToast } from '../utils/toast.js'
 import StatusIndicator from '../components/StatusIndicator.vue'
 import CourseCard from '../components/CourseCard.vue'
 
@@ -192,12 +193,6 @@ const togglePause = async () => {
 
 const goCourseDetail = (course) => {
   router.push({ path: `/course/${course.id || course.faceTeachId}`, query: { name: course.courseName } })
-}
-
-const showToast = (msg) => {
-  import('vant').then(({ showToast }) => {
-    showToast({ message: msg, duration: 2000 })
-  })
 }
 
 let timer = null
