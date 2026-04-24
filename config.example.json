@@ -1,0 +1,15 @@
+{
+  "admin_password": "admin123",
+  "c30_username": "",
+  "c30_password": "",
+  "auto_discuss_content": "老师讲得很好，受益匪浅",
+  "auto_brainstorm_content": "我认为应该从多个角度思考这个问题，结合实践进行深入分析",
+  "poll_intervals": {
+    "pre_class": 60,
+    "in_class": 120,
+    "between": 1800,
+    "weekend": 7200
+  },
+  "log_max_lines": 500,
+  "jwt_secret": ""
+}
